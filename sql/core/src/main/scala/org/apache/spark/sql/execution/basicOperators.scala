@@ -87,43 +87,65 @@ case class PartitionProject(projectList: Seq[Expression], child: SparkPlan) exte
   }
 
   /**
-   * This method takes an iterator as an input. It should first partition the whole input to disk.
-   * It should then read each partition from disk and construct do in-memory memoization over each
-   * partition to avoid recomputation of UDFs.
-   *
-   * @param input the input iterator
-   * @return the result of applying the projection
-   */
+    * This method takes an iterator as an input. It should first partition the whole input to disk.
+    * It should then read each partition from disk and construct do in-memory memoization over each
+    * partition to avoid recomputation of UDFs.
+    *
+    * @param input the input iterator
+    * @return the result of applying the projection
+    */
   def generateIterator(input: Iterator[Row]): Iterator[Row] = {
     // This is the key generator for the course-grained external hashing.
     val keyGenerator = CS143Utils.getNewProjection(projectList, child.output)
 
     // IMPLEMENT ME
 
+    val hashedRelation: DiskHashedRelation = DiskHashedRelation(input, keyGenerator, 64, 64000)
+    val partitions: Iterator[DiskPartition] = hashedRelation.getIterator()
+    var diskPartition: DiskPartition = null
+    var cachingIterator: Iterator[Row] = null
+
     new Iterator[Row] {
       def hasNext() = {
         // IMPLEMENT ME
-        false
+        var hasNext = false
+        if (cachingIterator != null && cachingIterator.hasNext) {
+          hasNext = true
+        } else {
+          hasNext = fetchNextPartition()
+        }
+        hasNext
       }
 
       def next() = {
         // IMPLEMENT ME
-        null
+        cachingIterator.next()
       }
 
       /**
-       * This fetches the next partition over which we will iterate or returns false if there are no more partitions
-       * over which we can iterate.
-       *
-       * @return
-       */
-      private def fetchNextPartition(): Boolean  = {
+        * This fetches the next partition over which we will iterate or returns false if there are no more partitions
+        * over which we can iterate.
+        *
+        * @return
+        */
+      private def fetchNextPartition(): Boolean = {
         // IMPLEMENT ME
-        false
+        var hasNext = partitions.hasNext
+        if (hasNext) {
+          diskPartition = partitions.next()
+          val data: Iterator[Row] = diskPartition.getData()
+          if (data.hasNext) {
+            cachingIterator = CS143Utils.generateCachingIterator(projectList, child.output)(data)
+            hasNext = true
+          } else {
+            hasNext = false
+          }
+
+        }
+        hasNext
       }
     }
   }
-
 }
 
 /**
@@ -271,7 +293,8 @@ case class TakeOrdered(limit: Int, sortOrder: Seq[SortOrder], child: SparkPlan) 
 /**
  * :: DeveloperApi ::
  * Performs a sort on-heap.
- * @param global when true performs a global sort of all partitions by shuffling the data first
+  *
+  * @param global when true performs a global sort of all partitions by shuffling the data first
  *               if necessary.
  */
 @DeveloperApi
@@ -296,7 +319,8 @@ case class Sort(
 /**
  * :: DeveloperApi ::
  * Performs a sort, spilling to disk as needed.
- * @param global when true performs a global sort of all partitions by shuffling the data first
+  *
+  * @param global when true performs a global sort of all partitions by shuffling the data first
  *               if necessary.
  */
 @DeveloperApi
@@ -323,7 +347,8 @@ case class ExternalSort(
 /**
  * :: DeveloperApi ::
  * Computes the set of distinct input rows using a HashSet.
- * @param partial when true the distinct operation is performed partially, per partition, without
+  *
+  * @param partial when true the distinct operation is performed partially, per partition, without
  *                shuffling the data.
  * @param child the input query plan.
  */
